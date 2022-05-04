@@ -148,7 +148,7 @@ TEST(ComputeCPP, WriteToSoA)
     using namespace sycl;
 
     SoACache test_obj;
-    test_obj.id.resize(1024*1024);
+    test_obj.id.resize(1024*1);
     try 
     {
         auto myQueue = InitialiseGPU();
@@ -171,6 +171,7 @@ TEST(ComputeCPP, WriteToSoA)
 
     /* Check the result is correct. */
     for (int i = 0; i < (int)test_obj.id.size(); i++) {
-        EXPECT_EQ(i, test_obj.id[i]);
+        if (i != test_obj.id[i])
+            EXPECT_EQ(i, test_obj.id[i]);
     }
 }

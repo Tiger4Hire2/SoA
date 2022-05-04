@@ -4,41 +4,8 @@
 #include <CL/sycl.hpp>
 namespace sycl = cl::sycl;
 
-namespace details
-{
-    template< typename result_type, typename ...types, std::size_t ...indices >
-    result_type
-    make_struct(std::tuple< types... > t, std::index_sequence< indices... >) // &, &&, const && etc.
-    {
-        return {std::get< indices >(t)...};
-    }
-}
-
-template< typename result_type, typename ...types >
-result_type
-make_struct(std::tuple< types... > t) // &, &&, const && etc.
-{
-    return details::make_struct< result_type, types... >(t, std::index_sequence_for< types... >{}); // if there is repeated types, then the change for using std::index_sequence_for is trivial
-}
 
 class SoACache;
-template <class Target, class MemberType>
-struct Mapping
-{
-    using Vector = std::vector<MemberType>;
-    constexpr Mapping(MemberType Target::* tgt, Vector SoACache::*src): m_tgt(tgt), m_src(src) {}
-    MemberType Target::* m_tgt;
-    Vector SoACache::*   m_src;
-};
-
-template <class Target, class MemberType>
-struct RefMapping
-{
-    using Vector = std::vector<MemberType>;
-    constexpr RefMapping(Vector SoACache::*src): m_src(src) {}
-    Vector SoACache::*   m_src;
-};
-
 
 struct SoACache
 {
@@ -98,6 +65,18 @@ struct SoACache
         return make_struct<T>(
             std::apply([this, idx](auto...mbrs){ return std::forward_as_tuple(((this->*mbrs).at(idx)) ...);},T::member_map)
         );
+    }
+private:
+    template< typename result_type, typename ...types, std::size_t ...indices >
+    static result_type make_struct_imp(std::tuple< types... > t, std::index_sequence< indices... >) // &, &&, const && etc.
+    {
+        return {std::get< indices >(t)...};
+    }
+
+    template< typename result_type, typename ...types >
+    static result_type make_struct(std::tuple< types... > t) // &, &&, const && etc.
+    {
+        return make_struct_imp< result_type, types... >(t, std::index_sequence_for< types... >{}); // if there is repeated types, then the change for using std::index_sequence_for is trivial
     }
 };
 
