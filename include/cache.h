@@ -1,6 +1,8 @@
 #pragma once
 #include <vector>
 #include <tuple>
+#include <CL/sycl.hpp>
+namespace sycl = cl::sycl;
 
 namespace details
 {
@@ -82,57 +84,20 @@ struct SoACache
             }, AsTuple());
     }
 
-    template<class ... T>
-    auto PerformFetch(int idx, T&&... mem)
-    {
-        return std::forward_as_tuple((this->*mem)[idx] ...);
-    }
-
-    template<class ... T>
-    auto PerformFetch(int idx, T&&... mem) const
-    {
-        return std::make_tuple((this->*mem)[idx] ...);
-    }
-
-    template<class Fn>
-    auto Fetch(int idx, Fn&& fn)
-    {
-        const auto members = fn;
-        return std::apply([this, idx](auto...mbrs){return PerformFetch(idx, mbrs...);}, members);
-    }
-
-    template<class Fn>
-    auto Fetch(int idx, Fn&& fn) const
-    {
-        const auto members = fn;
-        return std::apply([this, idx](auto...mbrs){return PerformFetch(idx, mbrs...);}, members);
-    }
-
-    template<class T>
-    T Fetch(int idx)
-    {
-        const auto members = T::member_map;
-        T retval{};
-        std::apply([this, &retval, idx](auto...mbrs){((retval.*mbrs.m_tgt = ((this->*mbrs.m_src).at(idx))), ...);}, members);
-        return retval;
-    }
-
     template<class T>
     T Fetch(int idx) const
     {
-        const auto members = T::member_map;
-        T retval{};
-        std::apply([this, &retval, idx](auto...mbrs){((retval.*mbrs.m_tgt = ((this->*mbrs.m_src).at(idx))), ...);}, members);
-        return retval;
+        return make_struct<T>(
+            std::apply([this, idx](auto...mbrs){ return std::make_tuple(((this->*mbrs).at(idx)) ...);},T::member_map)
+        );
     }
 
     template<class T>
-    T RefFetch(int idx) const
+    T RefFetch(int idx)
     {
-        const auto members = T::member_map;
-        T retval{};
-        std::apply([this, &retval, idx](auto...mbrs){((retval.*mbrs.m_tgt = ((this->*mbrs.m_src).at(idx))), ...);}, members);
-        return retval;
+        return make_struct<T>(
+            std::apply([this, idx](auto...mbrs){ return std::forward_as_tuple(((this->*mbrs).at(idx)) ...);},T::member_map)
+        );
     }
 };
 

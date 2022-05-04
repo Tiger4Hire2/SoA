@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Copyright (c) Microsoft Corporation.
+SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+-->
+
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+<Type Name="std::vector&lt;bool,*&gt;">
+      <DisplayString>{{ size={_Mysize} }}</DisplayString>
+      <Expand>
+          <Item Name="[capacity]" ExcludeView="simple">(_Myvec._Myend - _Myvec._Myfirst) * _EEN_VBITS</Item>
+          <IndexListItems>
+              <Size>_Mysize</Size>
+              <ValueNode>(bool)((_Myvec._Myfirst[$i / _EEN_VBITS] &gt;&gt; ($i % _EEN_VBITS)) &amp; 1)</ValueNode>
+          </IndexListItems>
+      </Expand>
+  </Type>
+  </AutoVisualizer>

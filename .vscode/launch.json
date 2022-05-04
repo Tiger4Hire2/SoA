@@ -11,7 +11,8 @@
             "program": "${workspaceRoot}/build/SoATest",
             "cwd": "${workspaceRoot}",
             "externalConsole": false,
-            "showDisplayString": true
+            "showDisplayString": true,
+            "visualizerFile": "${workspaceRoot}/stl.natvis"
           }
         ]
 }
