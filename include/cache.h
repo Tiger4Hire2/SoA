@@ -1,22 +1,72 @@
 #pragma once
 #include <vector>
 #include <tuple>
+#include <optional>
 #include <CL/sycl.hpp>
+#define NDEBUG  // cannot handle aassert in kernels
+#define BOOST_NO_EXCEPTIONS
+#include <boost/variant2/variant.hpp>
 namespace sycl = cl::sycl;
 
+class class_test;
 
-class SoACache;
+struct Rectangle
+{
+    double width_, height_;
+    double area() const { return width_ * height_; }
+};
+
+struct Circle
+{
+    double radius_;
+    double area() const { return M_PI * radius_ * radius_; }
+};
+
+using Shape = boost::variant2::variant<Circle, Rectangle>;
 
 struct SoACache
 {
+private:
+    template< typename result_type, typename ...types, std::size_t ...indices >
+    static result_type make_struct_imp(std::tuple< types... > t, std::index_sequence< indices... >) // &, &&, const && etc.
+    {
+        return {std::get< indices >(t)...};
+    }
+
+    template< typename result_type, typename ...types >
+    static result_type make_struct(std::tuple< types... > t) // &, &&, const && etc.
+    {
+        return make_struct_imp< result_type, types... >(t, std::index_sequence_for< types... >{});
+    }
+public:
     using Id = int;
     using Idx = int;
     using View = std::vector<Idx>;
     View id;  // special, do not add to members
 
-    std::vector<Id> index;
-    std::vector<int> breadth;
-    std::vector<void*> obj;
+
+    template<class T> class BufferedVector: public std::vector<T>
+    {
+    public:
+        using ReadAccessor = sycl::accessor<T, 1, sycl::access::mode::read, sycl::COMPUTECPP_ACCESS_TARGET_DEVICE>;
+        using WriteAccessor = sycl::accessor<T, 1, sycl::access::mode::write, sycl::COMPUTECPP_ACCESS_TARGET_DEVICE>;
+        using RWAccessor = sycl::accessor<T, 1, sycl::access::mode::read_write, sycl::COMPUTECPP_ACCESS_TARGET_DEVICE>;
+        std::optional<sycl::buffer<T, 1>> m_buffer;
+        using std::vector<T>::vector;
+        void load()     { 
+            m_buffer = sycl::buffer<T,1>{ std::vector<T>::data(), sycl::range<1>(std::vector<T>::size())}; 
+        }
+        void sync()     { m_buffer.reset(); }
+        inline ReadAccessor read_access(sycl::handler& cgh) const;
+        inline WriteAccessor write_access(sycl::handler& cgh);
+        inline RWAccessor read_write_access(sycl::handler& cgh);
+    };
+
+    BufferedVector<Id> index;
+    BufferedVector<int> breadth;
+    BufferedVector<void*> obj;
+    BufferedVector<Shape> shapes;
+    BufferedVector<double> area;
 
 
     static constexpr auto members_list = std::tuple{&SoACache::id, &SoACache::breadth, &SoACache::obj};
@@ -66,17 +116,47 @@ struct SoACache
             std::apply([this, idx](auto...mbrs){ return std::forward_as_tuple(((this->*mbrs).at(idx)) ...);},T::member_map)
         );
     }
-private:
-    template< typename result_type, typename ...types, std::size_t ...indices >
-    static result_type make_struct_imp(std::tuple< types... > t, std::index_sequence< indices... >) // &, &&, const && etc.
+    
+    template<class T>
+    void Load()
     {
-        return {std::get< indices >(t)...};
+        std::apply([this](auto...mbrs){ (((this->*mbrs).load()), ...);}, T::member_map);
     }
 
-    template< typename result_type, typename ...types >
-    static result_type make_struct(std::tuple< types... > t) // &, &&, const && etc.
+    template<class T>
+    T Access(sycl::handler& cgh)
     {
-        return make_struct_imp< result_type, types... >(t, std::index_sequence_for< types... >{}); // if there is repeated types, then the change for using std::index_sequence_for is trivial
+        auto temp{std::apply([this, &cgh](auto...mbrs){ return std::make_tuple(((this->*mbrs).read_write_access(cgh)) ...);}, T::member_map)};
+        return SoACache::make_struct<T>(temp);
     }
+    template<class T>
+    T LoadAndAccess(sycl::handler& cgh)
+    {
+        Load<T>();
+        return Access<T>(cgh);
+    }
+
+    template<class T>
+    void Sync()
+    {
+        std::apply([this](auto...mbrs){ (((this->*mbrs).sync()), ...);},T::member_map);
+    }
+
 };
 
+template<class T> 
+inline typename SoACache::BufferedVector<T>::WriteAccessor SoACache::BufferedVector<T>::write_access(sycl::handler& cgh)
+{ 
+    return m_buffer.value().template get_access<sycl::access::mode::write, sycl::access::target::global_buffer>(cgh); 
+}
+
+template<class T> 
+inline typename SoACache::BufferedVector<T>::ReadAccessor SoACache::BufferedVector<T>::read_access(sycl::handler& cgh) const  
+{
+    return m_buffer.value().template get_access<sycl::access::mode::read, sycl::access::target::global_buffer>(cgh); 
+}
+
+template<class T> 
+inline typename SoACache::BufferedVector<T>::RWAccessor SoACache::BufferedVector<T>::read_write_access(sycl::handler& cgh)  { 
+    return m_buffer.value().template get_access<sycl::access::mode::read_write, sycl::access::target::global_buffer>(cgh); 
+}

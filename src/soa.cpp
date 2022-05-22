@@ -4,6 +4,16 @@
 
 class assign_elements;
 class assign_ids;
+class access_test;
+class shape_test;
+
+namespace boost
+{
+	void throw_exception(const std::exception&)
+	{
+
+	}
+}
 auto InitialiseGPU()
 {
     using namespace sycl;
@@ -19,6 +29,16 @@ auto InitialiseGPU()
     });
     return myQueue;
 }
+
+struct GPUAccess{
+    typename SoACache::BufferedVector<int>::RWAccessor breadth; 
+    typename SoACache::BufferedVector<void*>::RWAccessor obj;
+    static constexpr auto member_map = std::tuple{
+                    &SoACache::breadth,
+                    &SoACache::obj
+            };
+};
+
 
 struct BreadthObj{
     int& breadth; 
@@ -174,4 +194,140 @@ TEST(ComputeCPP, WriteToSoA)
         if (i != test_obj.id[i])
             EXPECT_EQ(i, test_obj.id[i]);
     }
+}
+
+
+TEST(ComputeCPP, ReadObj)
+{
+    using namespace sycl;
+
+    SoACache test_obj;
+    test_obj.index.resize(1024*1);
+    try 
+    {
+        auto myQueue = InitialiseGPU();
+
+        test_obj.index.load();
+        myQueue.submit([&](handler& cgh) {
+            auto ptr = test_obj.index.write_access(cgh);
+            auto myRange = nd_range<1>(range<1>(test_obj.index.size()), range<1>(test_obj.index.size() / 4));
+            auto myKernel = ([ptr](nd_item<1> item) {
+                ptr[item.get_global_id()] = item.get_global_id()[0];
+            });
+            cgh.parallel_for<access_test>(myRange, myKernel);
+        });
+       test_obj.index.sync();
+    } catch (const exception& e) 
+    {
+        std::cout << "Synchronous exception caught:\n" << e.what();
+        return;
+    }
+
+    /* Check the result is correct. */
+    for (int i = 0; i < (int)test_obj.index.size(); i++) {
+        EXPECT_EQ(i, test_obj.index[i]);
+    }
+}
+
+TEST(ComputeCPP, ThrowOnEmptyVector)
+{
+    SoACache test_obj;
+    auto myQueue = InitialiseGPU();
+
+    EXPECT_THROW(test_obj.Load<GPUAccess>(), sycl::exception);
+}
+
+TEST(ComputeCPP, Execute)
+{
+    using namespace sycl;
+
+    SoACache test_obj;
+    test_obj.breadth.resize(1024);
+    test_obj.obj.resize(1024);
+    try 
+    {
+        auto myQueue = InitialiseGPU();
+
+        test_obj.Load<GPUAccess>();
+        myQueue.submit([&](handler& cgh) {
+            auto access = test_obj.Access<GPUAccess>(cgh);
+            auto myRange = nd_range<1>(range<1>(test_obj.breadth.size()), range<1>(128));
+            auto myKernel = ([access](nd_item<1> item) {
+               access.breadth[item.get_global_id()] = item.get_global_id()[0];
+               access.obj[item.get_global_id()] = (void*)item.get_global_id()[0];
+            });
+            cgh.parallel_for<GPUAccess>(myRange, myKernel);
+        });
+       test_obj.Sync<GPUAccess>();
+    } catch (const exception& e) 
+    {
+        std::cout << "Synchronous exception caught:\n" << e.what();
+        return;
+    }
+
+    /* Check the result is correct. */
+    for (int i = 0; i < (int)test_obj.breadth.size(); i++)
+//        if (i != test_obj.breadth[i])
+		{
+			EXPECT_EQ(i, test_obj.breadth[i]);
+			EXPECT_EQ((void*)i, test_obj.obj[i]);
+			if (i!=test_obj.breadth[i])
+				break;
+		}
+}
+
+
+
+struct ShapeAccess{
+    typename SoACache::BufferedVector<Shape>::RWAccessor shape; 
+    typename SoACache::BufferedVector<double>::RWAccessor area;
+    static constexpr auto member_map = std::tuple{
+                    &SoACache::shapes,
+                    &SoACache::area
+            };
+};
+
+TEST(ComputeCPP, Variants)
+{
+    using namespace sycl;
+
+    SoACache test_obj;
+    test_obj.breadth.resize(1024);
+    test_obj.obj.resize(1024);
+
+    for (int i = 0; i < 1024; ++i)
+        test_obj.shapes.push_back(Rectangle{1,1});
+
+    test_obj.shapes[0] = Rectangle{1,1};
+    test_obj.shapes[1] = Rectangle{2,1};
+    test_obj.shapes[2] = Rectangle{1,2};
+    test_obj.shapes[3] = Circle{1};
+    test_obj.area.resize(test_obj.shapes.size());
+    try 
+    {
+        auto myQueue = InitialiseGPU();
+
+        test_obj.Load<ShapeAccess>();
+        myQueue.submit([&](handler& cgh) {
+            auto access = test_obj.Access<ShapeAccess>(cgh);
+            auto myRange = nd_range<1>(range<1>(test_obj.shapes.size()), range<1>(128));
+            auto myKernel = ([access](nd_item<1> item) {
+                const auto idx = item.get_global_id();
+	            access.area[idx] = boost::variant2::visit([](const auto& s){return s.area();}, access.shape[idx]);
+            });
+            cgh.parallel_for<shape_test>(myRange, myKernel);
+        });
+       test_obj.Sync<ShapeAccess>();
+    } catch (const exception& e) 
+    {
+        std::cout << "Synchronous exception caught:\n" << e.what();
+        return;
+    }
+
+    const auto shape = boost::variant2::get<Rectangle>(test_obj.shapes[0]);
+    EXPECT_EQ(test_obj.area[0], 1.0);
+    EXPECT_EQ(test_obj.area[1], 2.0);
+    EXPECT_EQ(test_obj.area[2], 2.0);
+    EXPECT_EQ(test_obj.area[3], M_PI);
+
 }
